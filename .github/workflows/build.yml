@@ -83,12 +83,26 @@ jobs:
           tag="v$version-$BUILD"
           apk="$RUNNER_TEMP/lekto-$version-$BUILD.apk"
           cp app/android/app/build/outputs/apk/release/app-release.apk "$apk"
-          # A merge's message starts with "Merge pull request #n from …"; its title is what follows.
-          node -e '
-            const lines = (process.env.NOTES || "").split("\n");
-            const body = /^Merge pull request #\d+/.test(lines[0]) ? lines.slice(1) : lines;
-            process.stdout.write(body.join("\n").trim() || "A new build.");
-          ' > "$RUNNER_TEMP/notes.md"
+
+          # What the notes add to what is new, read from the APK itself.
+          tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          min_sdk=$("$tools/aapt2" dump badging "$apk" | sed -n "s/^minSdkVersion:'\([0-9]*\)'.*/\1/p")
+          certificate=$("$tools/apksigner" verify --print-certs "$apk" \
+            | sed -n 's/.*certificate SHA-256 digest: //p' | head -1 | tr a-f A-F | sed 's/../&:/g; s/:$//')
+          checksum=$(sha256sum "$apk" | cut -d' ' -f1)
+          android=$(node -p "({ 24: '7.0', 25: '7.1', 26: '8.0', 27: '8.1', 28: '9', 29: '10', 30: '11', 31: '12', 32: '12L', 33: '13', 34: '14', 35: '15', 36: '16' })[$min_sdk] ?? 'API $min_sdk'")
+          # The backticks are Markdown's, for the checksums: not meant to expand.
+          # shellcheck disable=SC2016
+          {
+            printf '%s\n\n' "${NOTES:-A new build.}"
+            printf -- '---\n\n'
+            printf '**Version** %s (build %s) · %s\n\n' "$version" "$BUILD" "$(date -u +%Y-%m-%d)"
+            printf '**Needs** Android %s or later, on a 64-bit ARM phone, and your own Gemini API key from Google AI Studio (free, no billing).\n\n' "$android"
+            printf 'Installs over the previous release and keeps your notes.\n\n'
+            printf '**APK SHA-256** `%s`\n\n' "$checksum"
+            printf '**Signing certificate SHA-256** `%s` (the same for every release)\n' "$certificate"
+          } > "$RUNNER_TEMP/notes.md"
+
           gh release create "$tag" "$apk" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Lekto $version ($BUILD)" \
