@@ -68,7 +68,9 @@ jobs:
           keystore="$RUNNER_TEMP/upload.keystore"
           printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 -d > "$keystore"
           export ORG_GRADLE_PROJECT_LEKTO_UPLOAD_STORE_FILE="$keystore"
-          ./gradlew assembleRelease --quiet --console=plain
+          # Only 64-bit ARM, which every phone it is for has: the other three would more than double
+          # the APK for nothing. Builds on a laptop keep all four, for the emulator.
+          ./gradlew assembleRelease --quiet --console=plain -PreactNativeArchitectures=arm64-v8a
           rm -f "$keystore"
 
       - name: Publish the release
