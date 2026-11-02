@@ -1,0 +1,94 @@
+# Builds the Android APK of Lekto and publishes it as a release here. The app's code is in a
+# private repo, which asks for each build by repository_dispatch with the commit to build; this
+# repo reads it with a read-only deploy key. Nothing but the APK is published: no artifacts, and
+# the steps print as little as they can, since these logs are public.
+name: Build and release
+
+on:
+  repository_dispatch:
+    types: [build]
+
+permissions:
+  contents: write
+
+# One build at a time, in the order asked: each one's number is the APK's versionCode.
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SHA: ${{ github.event.client_payload.sha }}
+    steps:
+      - name: Check out the app at the commit asked for
+        uses: actions/checkout@v4
+        with:
+          repository: javadbayzavi/my-class-note-picker
+          ref: ${{ github.event.client_payload.sha }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: app
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: app/.nvmrc
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install
+        working-directory: app
+        run: npm ci --no-audit --no-fund --loglevel=error
+
+      - name: Make the Android project
+        working-directory: app
+        env:
+          CI: 1
+          LEKTO_BUILD_NUMBER: ${{ github.run_number }}
+        run: npx expo prebuild --platform android --clean > /dev/null
+
+      - name: Build the APK, signed with the upload key
+        working-directory: app/android
+        env:
+          NODE_ENV: production
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
+          ORG_GRADLE_PROJECT_LEKTO_UPLOAD_STORE_PASSWORD: ${{ secrets.UPLOAD_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_LEKTO_UPLOAD_KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_LEKTO_UPLOAD_KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+        run: |
+          keystore="$RUNNER_TEMP/upload.keystore"
+          printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 -d > "$keystore"
+          export ORG_GRADLE_PROJECT_LEKTO_UPLOAD_STORE_FILE="$keystore"
+          ./gradlew assembleRelease --quiet --console=plain
+          rm -f "$keystore"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.client_payload.notes }}
+          BUILD: ${{ github.run_number }}
+        run: |
+          version=$(node -p "require('./app/app.json').expo.version")
+          tag="v$version-$BUILD"
+          apk="$RUNNER_TEMP/lekto-$version-$BUILD.apk"
+          cp app/android/app/build/outputs/apk/release/app-release.apk "$apk"
+          # A merge's message starts with "Merge pull request #n from …"; its title is what follows.
+          node -e '
+            const lines = (process.env.NOTES || "").split("\n");
+            const body = /^Merge pull request #\d+/.test(lines[0]) ? lines.slice(1) : lines;
+            process.stdout.write(body.join("\n").trim() || "A new build.");
+          ' > "$RUNNER_TEMP/notes.md"
+          gh release create "$tag" "$apk" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Lekto $version ($BUILD)" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --latest
