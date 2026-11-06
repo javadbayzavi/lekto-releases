@@ -96,15 +96,17 @@ jobs:
           {
             printf '%s\n\n' "${NOTES:-A new build.}"
             printf -- '---\n\n'
-            printf '**Version** %s (build %s) · %s\n\n' "$version" "$BUILD" "$(date -u +%Y-%m-%d)"
+            printf '**Version** %s · %s\n\n' "$version" "$(date -u +%Y-%m-%d)"
             printf '**Needs** Android %s or later, on a 64-bit ARM phone, and your own Gemini API key from Google AI Studio (free, no billing).\n\n' "$android"
             printf 'Installs over the previous release and keeps your notes.\n\n'
             printf '**APK SHA-256** `%s`\n\n' "$checksum"
             printf '**Signing certificate SHA-256** `%s` (the same for every release)\n' "$certificate"
           } > "$RUNNER_TEMP/notes.md"
 
+          # The build number stays in the tag and the APK's name, where the app reads it, but not
+          # in what people read.
           gh release create "$tag" "$apk" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Lekto $version ($BUILD)" \
+            --title "Lekto $version" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             --latest
